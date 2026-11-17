@@ -1,0 +1,244 @@
+---
+title: "Deliverable 5: Final Draft"
+author: "Alexander Reyes"
+output: html_document
+---
+
+## 1. Libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+library(dplyr)   # counting, filtering, and making summary tables
+library(ggplot2) # making graphs
+library(knitr)   # making tables look better in HTML
+```
+
+## 2. Summary
+
+I looked at reported crime in Los Angeles from 2020 to 2024 using a dataset with 1,004,894 crime reports and 28 original variables. I wanted to see how the number of crime reports changed each year, what types of crimes were most common, and which police areas had the most reports. I used R to count reports by year, crime description, and area. I also made graphs for victim age, area totals, the relationship between age and crime time, and crime types over time.
+
+The highest number of reports was in 2022 with 235,259. The most common crime description was vehicle theft, with 115,184 reports, and Central had the highest number of reports among LAPD areas, with 69,668. The number for 2024 was lower than earlier years, but I have to be careful when explaining that difference because the LAPD changed its reporting system in 2024. These numbers describe the records in this dataset, not every crime that happened in Los Angeles.
+
+## 3. Purpose
+
+My goal is to understand patterns in reported crime in Los Angeles between 2020 and 2024. My main questions are:
+
+1. How many crimes were reported for each year, and did the number increase or decrease?
+2. What were the most common types of crimes?
+3. Which LAPD areas had the most crime reports?
+
+I also looked at victim age and crime time to explore other patterns in the data.
+
+## 4. Data
+
+I downloaded the CSV from the [City of Los Angeles crime dataset](https://data.lacity.org/d/2nrs-mtv8). Each row is one recorded incident. I kept the original 28 variables and made two new columns for the year and hour of the crime.
+
+Put the downloaded CSV in the same folder as this R Markdown file and name it `Crime_Data.csv` before knitting.
+
+```{r load-data}
+crime_raw <- read.csv("Crime_Data.csv", check.names = FALSE)
+
+data.frame(Rows = nrow(crime_raw), Original_columns = ncol(crime_raw))
+```
+
+### Data dictionary
+
+The table shows every original column, what it means, whether I treat it as numerical or categorical, its actual R data type after `read.csv()`, and the units if there are any. Dates are stored as text in the original CSV, and codes are treated as categories even when R reads them as numbers.
+
+```{r dictionary}
+dictionary <- data.frame(
+  Variable = c("DR_NO", "Date Rptd", "DATE OCC", "TIME OCC", "AREA", "AREA NAME",
+               "Rpt Dist No", "Part 1-2", "Crm Cd", "Crm Cd Desc", "Mocodes",
+               "Vict Age", "Vict Sex", "Vict Descent", "Premis Cd", "Premis Desc",
+               "Weapon Used Cd", "Weapon Desc", "Status", "Status Desc",
+               "Crm Cd 1", "Crm Cd 2", "Crm Cd 3", "Crm Cd 4", "LOCATION",
+               "Cross Street", "LAT", "LON"),
+  Meaning = c("Report number", "Date reported", "Date crime happened", "Time crime happened",
+              "Police area code", "Police area name", "Reporting district", "Crime classification",
+              "Main crime code", "Crime description", "Incident codes", "Victim age",
+              "Victim sex", "Victim descent", "Location type code", "Location type description",
+              "Weapon code", "Weapon description", "Case status code", "Case status description",
+              "First crime code", "Second crime code", "Third crime code", "Fourth crime code",
+              "Approximate address", "Cross street", "Latitude", "Longitude"),
+  Kind = c("Categorical", "Categorical", "Categorical", "Numerical", "Categorical",
+           "Categorical", "Categorical", "Categorical", "Categorical", "Categorical",
+           "Categorical", "Numerical", "Categorical", "Categorical", "Categorical",
+           "Categorical", "Categorical", "Categorical", "Categorical", "Categorical",
+           "Categorical", "Categorical", "Categorical", "Categorical", "Categorical",
+           "Categorical", "Numerical", "Numerical"),
+  Units = c("None", "Calendar date", "Calendar date", "24-hour HHMM", "None",
+            "None", "None", "None", "None", "None", "None", "Years",
+            "None", "None", "None", "None", "None", "None", "None", "None",
+            "None", "None", "None", "None", "None", "None", "Degrees", "Degrees")
+)
+
+# R automatically decides the storage type when it reads the CSV.
+dictionary$R_type <- sapply(crime_raw[dictionary$Variable], class)
+dictionary <- dictionary[, c("Variable", "Meaning", "Kind", "R_type", "Units")]
+knitr::kable(dictionary)
+```
+
+### Missing values
+
+I checked every original column. Blank text and `NA` both count as missing. I kept missing values in the original data because some fields, like extra crime codes or weapon information, may not apply to every report. For the age charts, I used only ages from 1 to 110. I did not replace missing values with made-up numbers.
+
+```{r missing-values}
+missing_count <- sapply(crime_raw, function(x) {
+  sum(is.na(x) | trimws(as.character(x)) == "")
+})
+missing_table <- data.frame(Variable = names(missing_count), Missing = as.numeric(missing_count))
+knitr::kable(missing_table)
+```
+
+### Cleaning and preparing the data
+
+The data was already tidy enough for my questions because one row is one crime report. I did not need to use `pivot_longer()` or `pivot_wider()`. I made a Year column using the first four characters of `DATE OCC`, and an Hour column using `TIME OCC`. Then I filtered the file to 2020 through 2024. I kept the same columns instead of reshaping the whole dataset.
+
+```{r cleaning}
+crime <- crime_raw
+crime$Year <- as.numeric(substr(crime$`DATE OCC`, 1, 4))
+crime$Hour <- floor(as.numeric(crime$`TIME OCC`) / 100)
+
+crime <- crime %>%
+  filter(Year >= 2020, Year <= 2024)
+
+data.frame(Rows = nrow(crime), Columns = ncol(crime))
+head(crime[, c("DATE OCC", "Year", "TIME OCC", "Hour")])
+```
+
+The cleaned data has 30 columns because I added Year and Hour. I filtered out dates outside my five-year period, although the uploaded dataset already covers those years. I checked for repeated report numbers below, since a repeated number could be a possible duplicate.
+
+```{r duplicates}
+sum(duplicated(crime$DR_NO))
+```
+
+## 5. Exploratory Data Analysis
+
+### Crimes reported each year
+
+```{r year-table}
+by_year <- crime %>%
+  count(Year)
+knitr::kable(by_year, col.names = c("Year", "Reports"))
+```
+
+This table counts reports by the year the crime happened. It has the highest count in 2022 and the lowest in 2024.
+
+```{r year-plot}
+ggplot(by_year, aes(x = Year, y = n)) +
+  geom_line(color = "steelblue", linewidth = 1) +
+  geom_point(color = "steelblue", size = 2) +
+  scale_x_continuous(breaks = 2020:2024) +
+  labs(title = "Crime reports from 2020 to 2024", x = "Year", y = "Number of reports") +
+  theme_minimal()
+```
+
+This line graph shows a rise from 2020 to 2022, a small decrease in 2023, and a bigger drop in recorded reports for 2024. I cannot assume that all of the difference in 2024 reflects actual changes in crime because the reporting system changed.
+
+### Most common crimes
+
+```{r crime-table}
+by_crime <- crime %>%
+  count(`Crm Cd Desc`, sort = TRUE)
+top_crimes <- head(by_crime, 10)
+knitr::kable(top_crimes, col.names = c("Crime description", "Reports"))
+```
+
+This is a frequency table for a categorical variable. Vehicle theft has the most recorded incidents, followed by simple assault and burglary from a vehicle.
+
+### Areas with the most reports
+
+```{r area-table}
+by_area <- crime %>%
+  count(`AREA NAME`, sort = TRUE)
+top_areas <- head(by_area, 10)
+knitr::kable(top_areas, col.names = c("LAPD area", "Reports"))
+```
+
+This frequency table shows the ten LAPD areas with the most reports. Central has the highest number, but counts alone do not tell me which area has the highest crime rate.
+
+```{r area-plot}
+ggplot(top_areas, aes(x = reorder(`AREA NAME`, n), y = n)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Ten areas with the most reports", x = "LAPD area", y = "Number of reports") +
+  theme_minimal()
+```
+
+The longer bars show areas with more recorded crimes. The chart makes it easier to compare areas, but it does not adjust for population or visitors.
+
+### Victim age distribution
+
+```{r age-summary}
+ages <- crime %>%
+  filter(`Vict Age` > 0, `Vict Age` <= 110)
+summary(ages$`Vict Age`)
+```
+
+This summary gives the minimum, maximum, mean, and median of usable victim ages in years. The median is 37 years. I left out zero and implausible ages because they may be missing or incorrect values.
+
+```{r age-histogram}
+ggplot(ages, aes(x = `Vict Age`)) +
+  geom_histogram(binwidth = 5, fill = "steelblue", color = "white") +
+  labs(title = "Distribution of victim ages", x = "Victim age (years)", y = "Number of reports") +
+  theme_minimal()
+```
+
+Each bar covers a five-year age range. Adult ages have more recorded reports than the oldest ages. I would need population data to compare the risk across age groups.
+
+### Victim age and crime time
+
+```{r scatter}
+age_time <- crime %>%
+  filter(`Vict Age` > 0, `Vict Age` <= 110, Hour >= 0, Hour <= 23)
+
+set.seed(123)
+age_time_sample <- sample_n(age_time, 2000)
+
+ggplot(age_time_sample, aes(x = Hour, y = `Vict Age`)) +
+  geom_point(color = "steelblue", alpha = 0.25) +
+  labs(title = "Victim age and hour of crime (2,000 reports)",
+       x = "Hour of day (0 to 23)", y = "Victim age (years)") +
+  theme_minimal()
+```
+
+This scatter plot compares two numerical variables, victim age in years and crime hour. I sampled 2,000 reports so the dots would be easier to read. I do not see an obvious straight-line relationship. The vertical lines happen because Hour is rounded down to whole hours.
+
+### Three common crime types over time
+
+```{r crime-trend}
+top_three <- head(by_crime$`Crm Cd Desc`, 3)
+crime_trend <- crime %>%
+  filter(`Crm Cd Desc` %in% top_three) %>%
+  count(Year, `Crm Cd Desc`)
+
+ggplot(crime_trend, aes(x = Year, y = n, color = `Crm Cd Desc`)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  scale_x_continuous(breaks = 2020:2024) +
+  labs(title = "Three common crimes over time", x = "Year",
+       y = "Number of reports", color = "Crime type") +
+  theme_minimal()
+```
+
+This graph compares yearly reports for the three most common crime types. Vehicle theft has more reports than the other two types in each year. The 2024 values need the same caution as the overall yearly counts.
+
+## 6. Results
+
+I used `count()` to group reports by year, crime description, and LAPD area. I used `summary()` for victim ages. These methods fit my project because I am mainly trying to compare how often crimes appear in different years and categories. I did not need a complicated model to answer these questions.
+
+**Question 1: Did reported crime increase or decrease?** The data went from 199,847 reports in 2020 to 235,259 in 2022, then 232,345 in 2023 and 127,567 in 2024. That means the count increased between 2020 and 2022, then decreased in the remaining years. The yearly table and line graph show this pattern. Because the reporting system changed in 2024, I cannot say that the full drop represents a real decrease in crime.
+
+**Question 2: What crimes were most common?** Vehicle theft had 115,184 reports, simple assault had 74,821, and burglary from a vehicle had 63,515. The crime frequency table supports this answer.
+
+**Question 3: Which areas reported the most crime?** Central had 69,668 reports, followed by 77th Street with 61,756 and Pacific with 59,513. The area table and bar graph show this comparison. These are totals, not population-adjusted crime rates.
+
+## 7. Conclusions
+
+This project helped me understand how crime reports in Los Angeles changed over the five years and which crimes and areas appeared most often. I found the most reports in 2022, vehicle theft was the most common description, and Central had the highest area total. The graphs also showed patterns in victim age, although the scatter plot did not show a clear relationship between age and hour of crime.
+
+The biggest limitation is that the dataset only includes crimes recorded by the LAPD. Some columns have missing information, and the reporting system changed in March 2024. The area counts also do not account for population. If I continued the project, I would compare crime types by month and look more closely at what changed in 2024. I could also use population data to compare areas more fairly.
+
+## 8. References
+
+- [City of Los Angeles, Crime Data from 2020 to 2024](https://data.lacity.org/d/2nrs-mtv8)
+- [Data.gov dataset listing](https://catalog.data.gov/dataset/crime-data-from-2020-to-present)
